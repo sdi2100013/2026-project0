@@ -3,8 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-Config parseArguments(int argc, char *argv[]) {
-
+Config parseArguments(int argc, char* argv[]) {
 	Config config;
 
 	for (int i = 1; i < argc; ++i) {
@@ -271,7 +270,7 @@ Config parseArguments(int argc, char *argv[]) {
 				throw std::runtime_error("Missing value after" + arg);
 			}
 
-			++i; // Skip value of argument
+			++i;  // Skip value of argument
 		} else if (arg == "-exact" || arg == "-lsh" || arg == "-hypercube" ||
 		           arg == "-ivfflat" || arg == "-ivfpq") {
 		} else {
@@ -281,13 +280,13 @@ Config parseArguments(int argc, char *argv[]) {
 	return config;
 }
 
-bool isCommonOption(const std::string &arg) {
+bool isCommonOption(const std::string& arg) {
 	return arg == "-hp" || arg == "-mir" || arg == "-split" ||
 	       arg == "-vocab" || arg == "-S" || arg == "-D" || arg == "-set" ||
 	       arg == "-o" || arg == "-seed";
 }
 
-bool isMethodOption(const std::string &arg, Searchmethod method) {
+bool isMethodOption(const std::string& arg, Searchmethod method) {
 	if (method == Searchmethod::LSH) {
 		return arg == "-k" || arg == "-L" || arg == "-w";
 	}
