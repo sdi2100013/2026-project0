@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 #include <stdexcept>
+#include <fstream>
 
 
 //Συνάρτηση sift από διαφάνειες
@@ -16,8 +17,33 @@ cv::Mat extractSIFT(const std::string& impath){
 	cv::Mat descriptors;
 	sift->detectAndCompute(gray, cv::noArray(), keypoints, descriptors);
 	// One 128-dimensional descriptor per detected keypoint (CV_32F).
-	std::cout << descriptors.rows << " x " << descriptors.cols << '\n';
+	//std::cout << descriptors.rows << " x " << descriptors.cols << '\n';
 	// std::cout << descriptors << std::endl;
 	return descriptors;
 }
 
+
+std::vector<std::string> loadSplit(const std::string& spPath, const std::string& setName){
+    //αρχικοποίηση λίστας απο string
+    std::vector<std::string> sequences;
+    //ανοιγμα split
+    std::ifstream file(spPath);
+    
+    if(!file.is_open()){
+        throw std::runtime_error("Can't open split file: "+spPath);
+    }
+
+    std::string sequenceName;
+    std::string spName;
+    
+    //διαβάζω ανα διάδα το περιεχόμενο του spli και αν έχουν ιδιο spName τα προσθέτω στη λίστα 
+    while(file >> sequenceName >> spName){
+        
+        //*προσθήκη στο τέλος
+        if(spName == setName){
+            sequences.push_back(sequenceName);
+        }
+    }
+
+    return sequences;
+}

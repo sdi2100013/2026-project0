@@ -54,8 +54,15 @@ int main(int argc, char* argv[]){
     }
     //2. Load dataset / create vectors
     //temp dataset test
+    
+    //temp sift test
     cv::Mat descriptors = extractSIFT("test/image.jpg");
     std::cout << descriptors.rows << " x " << descriptors.cols << '\n';
+
+    //temp split test
+    std::vector<std::string> sequences = loadSplit(config.splitFile, config.dataSet);
+    std::cout << "Sequences found: " << sequences.size() << "\n";
+
 
     //3. Build selected search method
 
