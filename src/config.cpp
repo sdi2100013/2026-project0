@@ -10,31 +10,31 @@ Config parseArguments(int argc, char* argv[]) {
 		std::string arg = argv[i];
 
 		if (arg == "-hp") {
-			if (i + 1 >= argc) {
+			if (i + 1 >= argc || argv[i + 1][0] == '-') {
 				throw std::runtime_error("Missing value after -hp");
 			}
 			config.hpPath = argv[++i];
 		}
 		if (arg == "-mir") {
-			if (i + 1 >= argc) {
+			if (i + 1 >= argc || argv[i + 1][0] == '-') {
 				throw std::runtime_error("Missing value after -mir");
 			}
 			config.mirPath = argv[++i];
 		}
 		if (arg == "-split") {
-			if (i + 1 >= argc) {
+			if (i + 1 >= argc || argv[i + 1][0] == '-') {
 				throw std::runtime_error("Missing value after -split");
 			}
 			config.splitFile = argv[++i];
 		}
 		if (arg == "-set") {
-			if (i + 1 >= argc) {
+			if (i + 1 >= argc|| argv[i + 1][0] == '-') {
 				throw std::runtime_error("Missing value after -set");
 			}
 			config.dataSet = argv[++i];
 		}
 		if (arg == "-o") {
-			if (i + 1 >= argc) {
+			if (i + 1 >= argc || argv[i + 1][0] == '-') {
 				throw std::runtime_error("Missing value after -0");
 			}
 			config.outputFile = argv[++i];
@@ -155,7 +155,7 @@ Config parseArguments(int argc, char* argv[]) {
 				if (i + 1 >= argc) {
 					throw std::runtime_error("Missing value after -probes");
 				}
-				config.hypercube.probes = std::stof(argv[++i]);
+				config.hypercube.probes = std::stoi(argv[++i]);
 			}
 		}
 	}
@@ -267,7 +267,7 @@ Config parseArguments(int argc, char* argv[]) {
 		std::string arg = argv[i];
 		if (isCommonOption(arg) || isMethodOption(arg, config.method)) {
 			if (i + 1 >= argc) {
-				throw std::runtime_error("Missing value after" + arg);
+				throw std::runtime_error("Missing value after " + arg);
 			}
 
 			++i;  // Skip value of argument
@@ -305,3 +305,4 @@ bool isMethodOption(const std::string& arg, Searchmethod method) {
 	// IF METHOD == EXACT
 	return false;
 }
+
