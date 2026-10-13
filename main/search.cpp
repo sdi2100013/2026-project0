@@ -13,7 +13,6 @@
 int main(int argc, char* argv[]){
 
     //1. Parse command-line arguments
-
     //temp arguent test
     Config config = parseArguments(argc, argv);
 
@@ -54,6 +53,9 @@ int main(int argc, char* argv[]){
         std::cout << "IVFPQ nbits: " << config.ivfpq.nbits << '\n';
     }
     //2. Load dataset / create vectors
+    //temp dataset test
+    cv::Mat descriptors = extractSIFT("test/image.jpg");
+    std::cout << descriptors.rows << " x " << descriptors.cols << '\n';
 
     //3. Build selected search method
 
