@@ -55,14 +55,29 @@ int main(int argc, char* argv[]){
     //2. Load dataset / create vectors
     //temp dataset test
     
-    //temp sift test
-    cv::Mat descriptors = extractSIFT("test/image.jpg");
-    std::cout << descriptors.rows << " x " << descriptors.cols << '\n';
 
-    //temp split test
+    //Παίρνουμε training ακολουθείες για k-means
+    std::vector<std::string> trainSeq = loadSplit(config.splitFile, "train");
+    std::cout << "Training sequences" << trainSeq.size() << '\n';
+
+    //Παίνρουμε ακολουθείς validation η test
     std::vector<std::string> sequences = loadSplit(config.splitFile, config.dataSet);
-    std::cout << "Sequences found: " << sequences.size() << "\n";
+    std::cout << "Query sequences: " << sequences.size() << "\n";
 
+    //Παίρνουμε το paht του query image
+    std::string qpath = hpatchesImPath(config.hpPath, sequences[0], 1);
+    std::cout << "First query image: " << qpath << '\n';
+
+    
+    //temp sift test
+    cv::Mat descriptors = extractSIFT(qpath);
+    std::cout << "SIFT descriptors: " << descriptors.rows << " x " << descriptors.cols << '\n';
+
+    //Παίρνουμε τις 6 διαδρομες για το query
+    std::vector<std::string> paths = allhpatchesImPaths(config.hpPath, sequences[0]);
+    for(const std::string& path : paths){
+        std::cout << path << '\n';
+    }
 
     //3. Build selected search method
 

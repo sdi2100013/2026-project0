@@ -47,3 +47,20 @@ std::vector<std::string> loadSplit(const std::string& spPath, const std::string&
 
     return sequences;
 }
+
+//Δεν ανοίγει εικόνα δημιουργεί μόνο το όνομα του αρχείου
+std::string hpatchesImPath(const std::string& hpPath, const std::string& seqName, int imNumber){
+    return hpPath + "/" + seqName + "/" + std::to_string(imNumber) + ".ppm";
+}
+
+std::vector<std::string> allhpatchesImPaths(const std::string& hpPath, const std::string& seqName){
+    std::vector<std::string> paths;
+    std::string temppath;
+    
+    for( int i = 1; i <= 6; i++){
+        temppath = hpatchesImPath(hpPath, seqName, i);
+        paths.push_back(temppath);
+    }
+
+    return paths;
+}
