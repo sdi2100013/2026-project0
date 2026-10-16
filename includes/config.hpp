@@ -48,12 +48,13 @@ struct Config{
     std::string mirPath;
     std::string splitFile;
     std::string outputFile;
+    std::string vocabularyFile; // Optional saved visual vocabulary
 
-    int vocab;
+    int vocab = 0;
     int S = 500;
-    int D;
+    int D = 0;
     std::string dataSet;
-    int seed;
+    int seed = 0;
 
     //Σε περίπτωση που ο χρήστης δεν επιλέξει κάποια μέθοδο
     Searchmethod method = Searchmethod::NONE;

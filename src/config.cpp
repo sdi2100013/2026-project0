@@ -3,8 +3,12 @@
 #include <stdexcept>
 #include <string>
 
+bool isCommonOption(const std::string& arg);
+bool isMethodOption(const std::string& arg, Searchmethod method);
+
 Config parseArguments(int argc, char* argv[]) {
 	Config config;
+	bool seedProvided = false;
 
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
@@ -28,7 +32,7 @@ Config parseArguments(int argc, char* argv[]) {
 			config.splitFile = argv[++i];
 		}
 		if (arg == "-set") {
-			if (i + 1 >= argc|| argv[i + 1][0] == '-') {
+			if (i + 1 >= argc || argv[i + 1][0] == '-') {
 				throw std::runtime_error("Missing value after -set");
 			}
 			config.dataSet = argv[++i];
@@ -38,6 +42,12 @@ Config parseArguments(int argc, char* argv[]) {
 				throw std::runtime_error("Missing value after -0");
 			}
 			config.outputFile = argv[++i];
+		}
+		if (arg == "-vocab-file") {
+			if (i + 1 >= argc || argv[i + 1][0] == '-') {
+				throw std::runtime_error("Missing value after -vocab-file");
+			}
+			config.vocabularyFile = argv[++i];
 		}
 		if (arg == "-vocab") {
 			if (i + 1 >= argc) {
@@ -62,6 +72,7 @@ Config parseArguments(int argc, char* argv[]) {
 				throw std::runtime_error("Missing value after -seed");
 			}
 			config.seed = std::stoi(argv[++i]);
+			seedProvided = true;
 		}
 		if (arg == "-exact") {
 			if (config.method != Searchmethod::NONE) {
@@ -210,6 +221,9 @@ Config parseArguments(int argc, char* argv[]) {
 		}
 	}
 
+	if (!seedProvided) {
+		throw std::runtime_error("Missing required argument -seed");
+	}
 	if (config.hpPath.empty()) {
 		throw std::runtime_error("Missing required argument -hp");
 	}
@@ -283,7 +297,7 @@ Config parseArguments(int argc, char* argv[]) {
 bool isCommonOption(const std::string& arg) {
 	return arg == "-hp" || arg == "-mir" || arg == "-split" ||
 	       arg == "-vocab" || arg == "-S" || arg == "-D" || arg == "-set" ||
-	       arg == "-o" || arg == "-seed";
+	       arg == "-o" || arg == "-seed" || arg == "-vocab-file";
 }
 
 bool isMethodOption(const std::string& arg, Searchmethod method) {
@@ -305,4 +319,3 @@ bool isMethodOption(const std::string& arg, Searchmethod method) {
 	// IF METHOD == EXACT
 	return false;
 }
-
