@@ -1,5 +1,5 @@
 CXX := g++
-CPPFLAGS := -Iincludes
+CPPFLAGS := -Iinclude
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -Wpedantic
 LDFLAGS :=
 LDLIBS :=
