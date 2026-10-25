@@ -119,3 +119,127 @@ bool saveVocabulary(const std::string& path, const std::vector<float>& centroids
     }
     return true;
 }
+
+
+
+bool loadVocabulary(const std::string& path, const VocabMeta& expected, std::vector<float>& centroids, VocabMeta& meta, std::string& error) {
+    const std::string bad = "vocabulary cache '" + path + "' ";
+    if (!fs::exists(path)) {
+        error = bad + "does not exist";
+        return false;
+    }
+    try {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) {
+            error = bad + "cannot be opened";
+            return false;
+        }
+        int version = 0;
+        in.read(reinterpret_cast<char*>(&version), sizeof(version));
+        if(!in){
+            error = bad + "is corrupted: cannot read format version";
+            return false;
+        }
+        //Ανάγνωση των k,d,s από το αρχείο
+        in.read(reinterpret_cast<char*>(&meta.K), sizeof(meta.K));
+        in.read(reinterpret_cast<char*>(&meta.d), sizeof(meta.d));
+        in.read(reinterpret_cast<char*>(&meta.S), sizeof(meta.S));
+        if(!in){
+            error = bad + "is corrupted: cannot read vocabulary dimensions";
+            return false;
+        }
+        //Ανάγνωση seed
+        in.read(reinterpret_cast<char*>(&meta.seed), sizeof(meta.seed));
+        if(!in){
+            error = bad + "is corrupted: cannot read seed";
+            return false;
+        }
+        //Ανάγνωση του μήκους του splitHash
+        std::uint32_t hashLength = 0;
+        in.read(reinterpret_cast<char*>(&hashLength), sizeof(hashLength));
+        if(!in){
+            error = bad + "is corrupted: cannot read split hash length";
+            return false;
+        }
+        if (hashLength > 1024) {
+            error = bad + "is corrupted: invalid split hash length";
+            return false;
+        }
+        meta.splitHash.resize(hashLength);
+        in.read(meta.splitHash.data(), hashLength);
+        if(!in){
+            error = bad + "is corrupted: cannot read split hash";
+            return false;
+        }
+        //Ανάγνωση ρυθμίσεων των SIFT
+        std::uint32_t configLength = 0;
+        in.read(reinterpret_cast<char*>(&configLength), sizeof(configLength));
+        if(!in || configLength > 4096){
+            error = bad + "is corrupted: invalid SIFT configuration length";
+            return false;
+        }
+        meta.siftConfig.resize(configLength);
+        in.read(meta.siftConfig.data(), configLength);
+        if (!in) {
+            error = bad + "is corrupted: cannot read SIFT configuration";
+            return false;
+        }
+        //Ανάγωση πληροφοριών εκπαίδευσης
+        in.read(reinterpret_cast<char*>(&meta.descriptors), sizeof(meta.descriptors));
+        in.read(reinterpret_cast<char*>(&meta.iterations), sizeof(meta.iterations));
+        in.read(reinterpret_cast<char*>(&meta.objectiveInitial), sizeof(meta.objectiveInitial));
+        in.read(reinterpret_cast<char*>(&meta.objectiveFinal), sizeof(meta.objectiveFinal));
+        if(!in){
+            error = bad + "is corrupted: cannot read training metadata";
+            return false;
+        }
+        auto mismatch = [&](const std::string& what, const std::string& have, const std::string& want) {
+            error = bad + "is incompatible: " + what + " is " + have + " in the file but " + want + " was requested";
+            return false;
+        };
+        if (version != kVocabFormatVersion){
+            return mismatch("format version", std::to_string(version), std::to_string(kVocabFormatVersion));
+        }
+        if (meta.K != expected.K){
+            return mismatch("K", std::to_string(meta.K), std::to_string(expected.K));
+        }
+        if (meta.d != expected.d){
+            return mismatch("d", std::to_string(meta.d), std::to_string(expected.d));
+        }
+        if (meta.S != expected.S) {
+            return mismatch("S", std::to_string(meta.S), std::to_string(expected.S));
+        }
+        if (meta.seed != expected.seed) {
+            return mismatch("seed", std::to_string(meta.seed), std::to_string(expected.seed));
+        }
+        if (meta.splitHash != expected.splitHash) {
+            return mismatch("split.txt hash", meta.splitHash, expected.splitHash);
+        }
+        if (meta.siftConfig != expected.siftConfig) {
+            return mismatch("SIFT configuration", meta.siftConfig, expected.siftConfig);
+        }
+        //Ανάγνωση των centroidsS
+        if(meta.K <= 0 || meta.d <=0){
+            error = bad + "is corrupted: invalid centroid dimensions";
+            return false;
+        }
+        const size_t centroidCount = static_cast<size_t>(meta.K) * meta.d;
+        centroids.resize(centroidCount);
+        in.read(reinterpret_cast<char*>(centroids.data()), centroidCount * sizeof(float));
+        if (!in) {
+            error = bad + "is corrupted: cannot read centroids";
+            return false;
+        }
+        //Έλεγψος των τιμών centroids
+        for(float value : centroids){
+            if(!std::isfinite(value)){
+                error = bad + "is corrupted: centroids contain NaN or infinite values";
+                return false;
+            }
+        }
+    } catch (const std::exception& e) {
+        error = bad + "is corrupted: " + e.what();
+        return false;
+    }
+    return true;
+}

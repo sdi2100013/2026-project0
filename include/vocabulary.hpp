@@ -34,7 +34,8 @@ bool saveVocabulary(const std::string& path, const std::vector<float>& centroids
 //της έκδοσης, των παραμέτρων K, d, S, seed και του split hash
 //ελέγχει επίσης τις διαστάσεις και την εγκυρότητα των centroids
 //σε οποιοδήποτε πρόβλημα επιστρέφει false
-bool loadVocabulary(const std::string& path, const VocabMeta& expected, cv::Mat& centroids, VocabMeta& meta, std::string& error);
+bool loadVocabulary(const std::string& path, const VocabMeta& expected, std::vector<float>& centroids, VocabMeta& meta, std::string& error);
+
 
 //Υπολογισμός hash FNV-1a 64-bit (16 δεκαεξαδικά ψηφία)
 //για δεδομένα σε bytes ή για το περιεχόμενο ενός αρχείου.
