@@ -2,3 +2,4 @@
 *.d
 search
 build/
+/hpatches-sequences-release/
