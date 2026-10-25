@@ -68,3 +68,6 @@ constexpr int kMirflickrImages = 25000;
 //Αποθηκεύει την cache των BoVW διανυσμάτων σε δυαδικό αρχείο
 bool saveBovwCache(BovwCache& cache, std::string& error);
 
+
+//Φορτώνει την cache των BoVW διανυσμάτων από δυαδικό αρχείο
+bool loadBovwCache(BovwCache& cache, std::string& error);
