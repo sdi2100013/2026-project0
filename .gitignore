@@ -2,4 +2,5 @@
 *.d
 search
 build/
-/hpatches-sequences-release/
+data/
+cache/
