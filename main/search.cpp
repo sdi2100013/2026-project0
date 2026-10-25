@@ -1,7 +1,8 @@
 #include <iostream>
 
 #include "args.hpp"
-#include "dataset.hpp"
+#include "sift_extract.hpp"
+#include "vocabulary.hpp"
 #include "exact.hpp"
 #include "lsh.hpp"
 #include "hypercube.hpp"
@@ -26,7 +27,21 @@ int main(int argc, char* argv[]){
         return 1;
     } 
     
-    //2. Load dataset / create vectors
+    std::mt19937 rng(42);
+
+    std::vector<float> descriptors(10 * kSiftDim, 1.0f);
+    std::vector<float> sample = sampleDescriptors(descriptors, 3, rng);
+
+    std::cout << "SIFT sampling: "
+              << (sample.size() == 3 * kSiftDim ? "PASS" : "FAIL") << '\n';
+
+    std::cout << "SIFT config: " << siftConfigId() << '\n';
+
+    std::vector<float> empty;
+    std::cout << "Empty descriptors: "
+              << (sampleDescriptors(empty, 3, rng).empty() ? "PASS" : "FAIL") << '\n';
+
+    return 0;
 
     //4. Execute queries
 
