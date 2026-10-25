@@ -58,7 +58,37 @@ Matrix seedPlusPlus(const Matrix& data, int K, std::mt19937& rng) {
 	// Αρχικοποιηση centroid με τον κανονα k-means++.
 	const int N = data.rows, d = data.cols;
 	Matrix cent(K, d);
+	std::uniform_int_distribution<int> anyPoint(0, N - 1);
+	std::vector<double> d2(N, std::numeric_limits<double>::max());
 
+	for (int c = 0; c < K; ++c) {
+		// πρωτο σημειο επιλεγεται χωρις βαρη.
+		int idx = anyPoint(rng);
+		if (c > 0) {
+			double total = 0;
+			for (double v : d2) total += v;
+			if (total > 0) {  // αν υπαρχει απόσταση, γινεται weighted επιλογή
+				// τα μακρινα σημεια εχουν μεγαλυτερη πιθανοτητα
+				const double r =
+				    std::uniform_real_distribution<double>(0.0, total)(rng);
+				double acc = 0;
+				idx = N - 1;
+				for (int i = 0; i < N; ++i) {
+					acc += d2[i];
+					if (acc > r) {
+						idx = i;
+						break;
+					}
+				}
+			}
+		}
+		for (int j = 0; j < d; ++j) cent.row(c)[j] = data.row(idx)[j];
+		// ενημερωση της κοντινοτερης αποστασης καθε σημειου
+		for (int i = 0; i < N; ++i) {
+			const double v = sqDist(data.row(i), cent.row(c), d);
+			if (v < d2[i]) d2[i] = v;
+		}
+	}
 	return cent;
 }
 
@@ -67,13 +97,87 @@ Matrix seedPlusPlus(const Matrix& data, int K, std::mt19937& rng) {
 int nearestCentroid(const float* x, const Matrix& cent, float* dist) {
 	// ψαχνει το centroid με την μικροτερη αποσταη
 	int best = 0;
-
+	float bestD = sqDist(x, cent.row(0), cent.cols);
+	for (int j = 1; j < cent.rows; ++j) {
+		// σε ισοπαλια μενει το πρωτο centroid
+		const float dj = sqDist(x, cent.row(j), cent.cols);
+		if (dj < bestD) {
+			bestD = dj;
+			best = j;
+		}
+	}
+	if (dist) *dist = bestD;
 	return best;
 }
 
 KMeansResult kmeansLloyd(const Matrix& data, const Matrix& initialCentroids,
                          int maxIter, double tol) {
 	// ελεγχος δεδομενων και αρχικων centroids.
+	checkData(data, maxIter, tol);
+	if (initialCentroids.cols != data.cols || initialCentroids.rows < 1 ||
+	    initialCentroids.rows > data.rows ||
+	    initialCentroids.data.size() !=
+	        static_cast<size_t>(initialCentroids.rows) *
+	            initialCentroids.cols ||
+	    !allFinite(initialCentroids))
+		throw std::invalid_argument(
+		    "k-means: initial centroids must be finite, K x d with 1 <= K <= "
+		    "N");
+
+	const int N = data.rows, d = data.cols, K = initialCentroids.rows;
+	KMeansResult res;
+	res.centroids = initialCentroids;
+
+	std::vector<int> labels(N), newLabels(N);
+	std::vector<float> dist(N);
+	// πρωτη αναθση πριν ξεκινησουν οι επαναληψεις
+	res.objective.push_back(assign(data, res.centroids, labels, dist));
+
+	for (int it = 1; it <= maxIter; ++it) {
+		// μηδενισμος αθροισματων για τα νεα centroids
+		// καθε centroid γινεται ο μεσος ορος του cluster του
+		std::vector<double> sum(static_cast<size_t>(K) * d, 0.0);
+		std::vector<int> count(K, 0);
+		for (int i = 0; i < N; ++i) {
+			// προσθικη του σημειου στο αντιστοιχο cluser
+			const float* x = data.row(i);
+			double* s = &sum[static_cast<size_t>(labels[i]) * d];
+			for (int c = 0; c < d; ++c) s[c] += x[c];
+			++count[labels[i]];
+		}
+		for (int j = 0; j < K; ++j) {
+			// Υπολογισμος μεσου ορου για το cluser
+			float* c = res.centroids.row(j);
+			if (count[j] > 0) {
+				for (int k = 0; k < d; ++k)
+					c[k] = static_cast<float>(
+					    sum[static_cast<size_t>(j) * d + k] / count[j]);
+				continue;
+			}
+			int far = 0;  // αδειο cluster: παιρνει το πιο απομακρυσμένο σημειο
+			for (int i = 1; i < N; ++i)
+				if (dist[i] > dist[far]) far = i;
+			if (dist[far] > 0) {
+				// Το αδειο cluster παιρνει δυσκολο σημειο
+				for (int k = 0; k < d; ++k) c[k] = data.row(far)[k];
+				dist[far] = -1;
+				++res.emptyRepaired;
+			}
+		}
+
+		// νεα αναθεση σημειων με τα ενημερωμένα centroids
+		const double prev = res.objective.back();
+		const double J = assign(data, res.centroids, newLabels, dist);
+		res.objective.push_back(J);
+		res.iterations = it;
+		const bool same = newLabels == labels;
+		labels.swap(newLabels);
+		// τρματισμος αν δεν αλλαξαν οι αναθεσεις ή το κοστοσ
+		if (same || prev - J <= tol * prev) {
+			res.converged = true;
+			break;
+		}
+	}
 	return res;
 }
 
