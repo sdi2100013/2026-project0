@@ -201,3 +201,13 @@ bool loadBovwCache(BovwCache& cache, std::string& error) {
     }
     return true;
 }
+
+//Αρχικοποίηση των πινάκων αναζήτησης αν είναι άδειοι
+void initIfNew(SearchData& data, int K) {
+    if (data.database.rows == 0){
+        data.database = Matrix(0, K);
+    }
+    if (data.queries.rows == 0){
+        data.queries = Matrix(0, K);
+    }
+}
