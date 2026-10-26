@@ -132,6 +132,30 @@ int main(int argc, char* argv[]){
         return 1;
     }
     std::cout << "InitIfNew: PASS\n";
+    
+    //TEST KMEANS
+    Matrix points(4, 2);
+    points.data = {0, 0, 0, 2, 10, 10, 10, 12};
+
+    auto km = kmeans(points, 2, 42);
+    auto km2 = kmeans(points, 2, 42);
+
+    //Έλεγχος διαστάσεων, μείωσης κόστους και σταθερού seed
+    bool ok = km.centroids.rows == 2 && km.centroids.cols == 2 && km.objective.size() >= 2 && km.objective.back() <= km.objective.front() && km.centroids.data == km2.centroids.data;
+
+    //Έλεγχος ότι τα δύο clusters διαχωρίζονται σωστά
+    int a = nearestCentroid(points.row(0), km.centroids);
+    int b = nearestCentroid(points.row(1), km.centroids);
+    int c = nearestCentroid(points.row(2), km.centroids);
+    int d = nearestCentroid(points.row(3), km.centroids);
+    ok = ok && a == b && c == d && a != c;
+
+    if (!ok) {
+        std::cerr << "KMeans: FAIL\n";
+        return 1;
+    }
+    std::cout << "KMeans: PASS\n";
+
 
     std::cout << "\nALL TESTS PASSED\n";
     return 0;
