@@ -1,12 +1,15 @@
 #include "vocabulary.hpp"
 
-//#include "kmeans.hpp"
-//#include "sift_extract.hpp"
+#include "kmeans.hpp"
+#include "sift_extract.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <system_error>
 #include <exception>
+#include <stdexcept>
 #include <cstdint>
 #include <vector>
 #include <chrono>
@@ -46,6 +49,12 @@ bool fileHash(const std::string& path, std::string& hash, std::string& error) {
     return true;
 }
 
+
+//Δημιουργεί το όνομα και τη διαδρομή του αρχείου cache για το Vocabulary
+//το όνομα περιλαμβάνει τις ρυθμίσεις SIFT, τον αριθμό των clusters (K), τον αριθμό των descriptors ανά εικόνα (S) και το seed
+std::string vocabCachePath(int K, int S, unsigned seed) {
+    return "data/vocab_" + siftConfigId() + "_K" + std::to_string(K) + "_S" + std::to_string(S) + "_seed" + std::to_string(seed) + ".bin";
+}
 
 
 //Αποθηκεύει τα centroids και τα metadata του vocabulary σε ένα αρχείο
@@ -121,7 +130,7 @@ bool saveVocabulary(const std::string& path, const std::vector<float>& centroids
 }
 
 
-
+//Φορτώνει το vocabulary από το path
 bool loadVocabulary(const std::string& path, const VocabMeta& expected, std::vector<float>& centroids, VocabMeta& meta, std::string& error) {
     const std::string bad = "vocabulary cache '" + path + "' ";
     if (!fs::exists(path)) {
@@ -241,5 +250,82 @@ bool loadVocabulary(const std::string& path, const VocabMeta& expected, std::vec
         error = bad + "is corrupted: " + e.what();
         return false;
     }
+    return true;
+}
+
+
+//Εκπαιδεύει το vocabulary ή το φορτώνει από το αρχείο cache αν υπάρχει
+bool trainOrLoadVocabulary(const std::string& hpPath, const std::string& splitPath, int K, int S, unsigned seed, const std::string& cachePath, std::vector<float>& vocab, VocabInfo& info, std::string& error){
+    //Έναρξη μέτρησης χρόνου εκτέλεσης
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    //Υπολογισμό του χρόνου που έχει περάσει από την έναρξη
+    auto elapsed = [&] { 
+        return std::chrono::duration<double>(Clock::now() - start).count(); 
+    };
+    //Δημιουργία των παραμέτρων του vocabulary
+    VocabMeta want;
+    //Αποθύκευσ δεδομένων
+    want.K = K;
+    want.d = kSiftDim;
+    want.S = S;
+    want.seed = seed;
+    want.siftConfig = siftConfigId();
+    if (K <= 0 || S <= 0) {
+        error = "K and S must be positive";
+        return false;
+    }
+    //Υπολογισμός του hash του αρχείου split
+    if (!fileHash(splitPath, want.splitHash, error)){
+        return false;
+    }
+    //Έλεγχος αν υπάρχει ήδη αποθηκευμένο vocabulary
+    std::error_code ec;
+    if (fs::exists(cachePath, ec)) {
+        //Το vocabulary θα φορτωθει από την cache
+        info.fromCache = true;
+        //Φόρτωση του vocabulary και έλεγχο παραμέτρων
+        if (!loadVocabulary(cachePath, want, vocab, info.meta, error)){
+            return false;
+        }
+        //Αποθήκευση του χρόνου φόρτωσης
+        info.seconds = elapsed();
+        return true;
+    }
+    //Δημιουργία γεννήτριας τυχαίων αριθμών
+    std::mt19937 rng(seed);
+    std::vector<float> training;
+    TrainingStats st;
+    //Συγκέντρωση των SIFT descriptors από τις εικόνες εκπαίδευσης
+    if (!collectTrainingDescriptors(hpPath, splitPath, S, rng, training, st, error)){
+        return false;
+    }
+    //Δημιουργία πίνακα για την εκπαίδευση της k-means
+    Matrix data(static_cast<int>(training.size() / kSiftDim), kSiftDim);
+    //Μεταφορά των descriptors στον πίνακα
+    data.data = training;
+    try {
+        //Εκπαίδευση του vocabulary με τον αλγόριθμο k-means
+        KMeansResult km = kmeans(data, K, seed);
+        //Έλεγχος ότι η k-means επέστρεψε τιμές της αντικειμενικής συνάρτησης
+        if (km.objective.empty()) {
+            throw std::runtime_error("k-means returned an empty objective");
+        }
+        vocab = km.centroids.data;
+        info.meta = want;
+        info.meta.descriptors = data.rows;
+        info.meta.iterations = km.iterations;
+        info.meta.objectiveInitial = km.objective.front();
+        info.meta.objectiveFinal = km.objective.back();
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
+    //Αποθήκευση του vocabulary στο αρχείο cache
+    if (!saveVocabulary(cachePath, vocab, info.meta, error)){
+        return false;
+    }
+    info.fromCache = false;
+    info.seconds = elapsed();
     return true;
 }

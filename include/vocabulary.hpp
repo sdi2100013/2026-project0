@@ -38,6 +38,20 @@ bool loadVocabulary(const std::string& path, const VocabMeta& expected, std::vec
 
 
 //Υπολογισμός hash FNV-1a 64-bit (16 δεκαεξαδικά ψηφία)
-//για δεδομένα σε bytes ή για το περιεχόμενο ενός αρχείου.
+//για δεδομένα σε bytes ή για το περιεχόμενο ενός αρχείου
 std::string hashBytes(const void* data, size_t size);
 bool fileHash(const std::string& path, std::string& hash, std::string& error);
+
+
+//Δημιουργεί το όνομα και τη διαδρομή του αρχείου cache για το Vocabulary
+std::string vocabCachePath(int K, int S, unsigned seed);
+
+struct VocabInfo {
+    bool fromCache = false;
+    double seconds = 0;
+    VocabMeta meta;
+};
+
+
+//Εκπαιδεύει το vocabulary ή το φορτώνει από το αρχείο cache αν υπάρχει
+bool trainOrLoadVocabulary(const std::string& hpPath, const std::string& splitPath, int K, int S, unsigned seed, const std::string& cachePath, std::vector<float>& vocab, VocabInfo& info, std::string& error);
