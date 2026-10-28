@@ -27,9 +27,25 @@ struct HypercubeIndex {
 };
 
 
+//Κατασκευή του ευρετηρίου Hypercube
+//Απαιτούνται 1 <= kproj <= 30, w > 0 και έγκυρες διαστάσεις βάσης
+HypercubeIndex buildHypercube(const Matrix& database, int kproj, double w, unsigned seed);
+
+
 //Υπολογισμός ενός bit από την αντίστοιχη συνάρτηση κατακερματισμού
 int hypercubeBit(const HypercubeIndex& index, int fn, long long hashValue);
 
 //Υπολογισμός του κωδικού κορυφής για ένα διάνυσμα
 uint32_t hypercubeVertex(const HypercubeIndex& index, const float* p);
+
+
+
+//Επίσκεψη έως probes κορυφών με αύξουσα απόσταση Hamming από τη βάση
+//Για ίση απόσταση ακολουθείται λεξικογραφική σειρά των θέσεων των bits
+//Η επίσκεψη σταματά νωρίτερα αν η visit επιστρέψει false
+void forEachVertexByHamming(uint32_t base, int d, int probes, const std::function<bool(uint32_t)>& visit);
+
+//Επιστροφή των κορυφών σε διάνυσμα με σειρά απόστασης Hamming
+std::vector<uint32_t> verticesByHamming(uint32_t base, int d, int probes);
+
 
