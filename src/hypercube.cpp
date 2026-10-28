@@ -147,3 +147,52 @@ std::vector<uint32_t> verticesByHamming(uint32_t base, int d, int probes) {
     //Επιστροφή των κορυφών με τη σειρά επίσκεψης
     return order;
 }
+
+
+std::vector<int> hypercubeCandidates(const HypercubeIndex& index,const float* q, int M, int probes) {
+    //Λίστα με τους δείκτες των υποψήφιων εικόνων
+    std::vector<int> found;
+    //Επίσκεψη έως probes κορυφών με αύξουσα απόσταση Hamming
+    //από την κορυφή στην οποία αντιστοιχεί το query
+    forEachVertexByHamming(
+        hypercubeVertex(index, q),
+        index.d,
+        probes,
+        [&](uint32_t vertex) {
+            //Αναζήτηση της κορυφής στο ευρετήριο
+            auto it = index.vertices.find(vertex);
+            //Αν η κορυφή είναι κενή, συνεχίζουμε στην επόμενη
+            if (it == index.vertices.end()) {
+                return true;
+            }
+            //Εξέταση των εικόνων που ανήκουν στην κορυφή
+            for (int idx : it->second) {
+                //Διακοπή όταν εξεταστούν M εικόνες
+                if (static_cast<int>(found.size()) >= M) {
+                    return false;
+                }
+                //Προσθήκη του δείκτη της εικόνας στους υποψηφίους
+                found.push_back(idx);
+            }
+            //Συνέχιση μόνο αν δεν έχει συμπληρωθεί το όριο M
+            return static_cast<int>(found.size()) < M;
+        }
+    );
+    //Επιστροφή των υποψήφιων εικόνων
+    return found;
+}
+
+
+std::vector<int> hypercubeSearch(const HypercubeIndex& index, const Matrix& database, const Matrix& query, int M, int probes, int topK) {
+    //Έλεγχος ότι το query έχει μία γραμμή και K διαστάσεις
+    if (query.rows != 1 || query.cols != index.K) {
+        throw std::invalid_argument("hypercube: query must be a 1 x K row");
+    }
+    //Εύρεση των υποψήφιων εικόνων μέσω του Hypercube
+    std::vector<int> candidates = hypercubeCandidates(
+        index, query.row(0), M, probes
+    );
+    //Ταξινόμηση των υποψηφίων με βάση την Ευκλείδεια απόσταση
+    //και επιστροφή των topK κοντινότερων εικόνων
+    return topByDistance(database, query, candidates, topK);
+}

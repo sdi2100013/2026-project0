@@ -49,3 +49,11 @@ void forEachVertexByHamming(uint32_t base, int d, int probes, const std::functio
 std::vector<uint32_t> verticesByHamming(uint32_t base, int d, int probes);
 
 
+//Εύρεση υποψήφιων διανυσμάτων από έως probes κορυφές
+//Εξετάζονται το πολύ M διανύσματα συνολικά
+//Στο όριο probes υπολογίζονται και οι κενές κορυφές
+std::vector<int> hypercubeCandidates(const HypercubeIndex& index, const float* q, int M, int probes);
+
+//Αναζήτηση και ταξινόμηση υποψηφίων με βάση την πραγματική απόσταση
+//Επιστρέφονται έως topK αποτελέσματα χωρίς συμπλήρωση
+std::vector<int> hypercubeSearch( const HypercubeIndex& index, const Matrix& database, const Matrix& query, int M, int probes, int topK = kTopK);
