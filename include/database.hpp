@@ -1,13 +1,12 @@
 #pragma once
 
-#include "args.hpp"
-#include "vocabulary.hpp"
-#include "kmeans.hpp"
-
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "args.hpp"
+#include "kmeans.hpp"
+#include "vocabulary.hpp"
 
 //Δομή δεδομένων για τα queries και τη βάση αναζήτησης
 struct SearchData {
