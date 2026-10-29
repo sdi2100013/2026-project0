@@ -1,144 +1,170 @@
-#include <iostream>
+#include <cmath>
 #include <fstream>
+#include <iostream>
 
 #include "args.hpp"
+#include "bovw.hpp"
+#include "database.hpp"
+#include "evaluation.hpp"
+#include "exact.hpp"
+#include "hypercube.hpp"
+#include "ivf.hpp"
+#include "lsh.hpp"
 #include "sift_extract.hpp"
 #include "vocabulary.hpp"
-#include "database.hpp"
-#include "exact.hpp"
-#include "lsh.hpp"
-#include "hypercube.hpp"
-#include "ivfflat.hpp"
-#include "ivfpq.hpp"
-#include "evaluation.hpp"
 
+int main(int argc, char* argv[]) {
+	Config cfg;
+	std::string error;
+	// Ανάγνωση και έλεγχος των παραμέτρων εκτέλεσης
+	if (!parseArgs(std::vector<std::string>(argv + 1, argv + argc), cfg,
+	               error)) {
+		std::cerr << "error: " << error << '\n';
+		return 2;
+	}
+	// Έλεγχος ότι η επιλεγμένη μέθοδος υποστηρίζεται
+	if (cfg.method != "exact" && cfg.method != "lsh" &&
+	    cfg.method != "hypercube" && cfg.method != "ivfflat" &&
+	    cfg.method != "ivfpq") {
+		std::cerr << "error: unsupported method " << cfg.method << '\n';
+		return 1;
+	}
+	// Προετοιμασία των δεδομένων και του vocabulary
+	SearchData data;
+	VocabInfo vocab;
+	if (!prepareSearchData(cfg, data, vocab, error)) {
+		std::cerr << "error: " << error << '\n';
+		return 1;
+	}
+	// Εμφάνιση πληροφοριών για το vocabulary και τα δεδομένα
+	std::cout << "Vocabulary K=" << cfg.vocab << ": "
+	          << (vocab.fromCache ? "loaded from cache" : "trained and saved")
+	          << " in " << vocab.seconds << " s\n";
+	std::cout << "Queries: " << data.queries.rows << " (" << cfg.set
+	          << "), database: " << data.database.rows << " images\n";
+	std::cout << "BoVW vectors: " << data.imagesFromCache << " from cache, "
+	          << data.imagesComputed << " computed with SIFT\n";
+	RunResult run;
+	std::string title;
+	try {
+		// Έναρξη μέτρησης του χρόνου κατασκευής του ευρετηρίου
+		const auto start = std::chrono::steady_clock::now();
+		if (cfg.method == "exact") {
+			// Ακριβής αναζήτηση σε ολόκληρη τη βάση
+			title = "Exact Search";
+			run = runQueries(
+			    data,
+			    [&](const Matrix& query) {
+				    return exactSearch(data.database, query);
+			    },
+			    cfg.repeat);
+		} else if (cfg.method == "lsh") {
+			// Κατασκευή του ευρετηρίου LSH
+			title = "LSH";
+			const LshIndex index =
+			    buildLsh(data.database, cfg.k, cfg.L, cfg.w, cfg.seed);
+			std::cout << "LSH index (k=" << cfg.k << ", L=" << cfg.L
+			          << ", w=" << cfg.w << ", table size " << index.tableSize
+			          << ") built in "
+			          << std::chrono::duration<double>(
+			                 std::chrono::steady_clock::now() - start)
+			                 .count()
+			          << " s\n";
+			// Εκτέλεση αναζήτησης με LSH
+			run = runQueries(
+			    data,
+			    [&](const Matrix& query) {
+				    return lshSearch(index, data.database, query);
+			    },
+			    cfg.repeat);
+		} else if (cfg.method == "ivfflat" || cfg.method == "ivfpq") {
+			// Επιλογή μεταξύ IVFFlat και IVFPQ
+			const bool pq = cfg.method == "ivfpq";
+			title = pq ? "IVFPQ" : "IVFFlat";
+			// Κατασκευή ή φόρτωση του ευρετηρίου IVF
+			IvfIndex index;
+			bool cached = false;
+			double seconds = 0.0;
+			if (!prepareIvf(cfg, data.database, index, cached, seconds,
+			                error)) {
+				std::cerr << "error: " << error << '\n';
+				return 1;
+			}
+			// Εμφάνιση πληροφοριών του ευρετηρίου IVF
+			std::cout << title << " index (kclusters=" << index.coarse.rows
+			          << ", nprobe=" << cfg.nprobe;
+			if (pq) {
+				std::cout << ", M=" << cfg.M << ", nbits=" << cfg.nbits;
+			}
+			std::cout << "): "
+			          << (cached ? "loaded from cache" : "trained and saved")
+			          << " in " << seconds << " s\n";
+			// Εκτέλεση αναζήτησης με IVFFlat ή IVFPQ
+			run = runQueries(
+			    data,
+			    [&](const Matrix& query) {
+				    return pq ? ivfPqSearch(index, query.row(0), cfg.nprobe)
+					          : ivfFlatSearch(index, data.database,
+					                          query.row(0), cfg.nprobe);
+			    },
+			    cfg.repeat);
+		} else {
+			// Κατασκευή του ευρετηρίου Hypercube
+			title = "Hypercube";
+			const HypercubeIndex index =
+			    buildHypercube(data.database, cfg.kproj, cfg.w, cfg.seed);
+			std::cout << "Hypercube index (kproj=" << cfg.kproj
+			          << ", w=" << cfg.w << ", M=" << cfg.M
+			          << ", probes=" << cfg.probes << ") built in "
+			          << std::chrono::duration<double>(
+			                 std::chrono::steady_clock::now() - start)
+			                 .count()
+			          << " s, " << index.vertices.size()
+			          << " non-empty vertices\n";
+			// Εκτέλεση αναζήτησης με Hypercube
+			run = runQueries(
+			    data,
+			    [&](const Matrix& query) {
+				    return hypercubeSearch(index, data.database, query, cfg.M,
+					                       cfg.probes);
+			    },
+			    cfg.repeat);
+		}
+	} catch (const std::exception& e) {
+		// Διαχείριση σφαλμάτων κατά την κατασκευή και την αναζήτηση
+		std::cerr << "error: " << e.what() << '\n';
+		return 1;
+	}
+	// Καταμέτρηση των queries που επέστρεψαν λιγότερα από 10 αποτελέσματα
+	int fewer = 0;
+	for (const auto& top : run.ranked) {
+		if (static_cast<int>(top.size()) < kTopK) {
+			++fewer;
+		}
+	}
+	// Αποθήκευση των αποτελεσμάτων αναζήτησης
+	if (!writeResults(cfg.out, title, data, run, error)) {
+		std::cerr << "error: " << error << '\n';
+		return 1;
+	}
+	// Αποθήκευση των χρόνων, εφόσον έχει δοθεί αρχείο timing
+	if (!cfg.timing.empty()) {
+		if (!writeTiming(cfg.timing, data, run, error)) {
+			std::cerr << "error: " << error << '\n';
+			return 1;
+		}
+	}
+	// Εμφάνιση των συνολικών μετρικών αξιολόγησης
+	std::cout << "Mean Recall@5: " << run.mean.recall5 << '\n';
+	std::cout << "Mean Recall@10: " << run.mean.recall10 << '\n';
+	std::cout << "mAP@10: " << run.mean.ap10 << '\n';
 
-int main(int argc, char* argv[]){
-    //1. Parse command-line arguments
-    Config cfg;
-    std::string error;
-
-    //Έλεγχοσ παραμέτρων
-    if (!parseArgs(std::vector<std::string>(argv + 1, argv + argc), cfg, error)) {
-        std::cerr << "error: " << error << "\n";
-        return 2;
-    }
-
-    //Έλεγχος ότι επιλεχθηκε σωστά ο αλγοριθμος αναζήτησης
-    if (cfg.method != "exact" && cfg.method != "lsh" &&
-        cfg.method != "hypercube" && cfg.method != "ivfflat" &&
-        cfg.method != "ivfpq") {
-        std::cerr << "error: -" << cfg.method
-                  << " is not supported yet\n";
-        return 1;
-    }
-
-    std::mt19937 rng(42);
-
-    //Διαδρομή του dataset
-    std::string hpPath = "data/hpatches-sequences-release";
-    //Διαδρομή του αρχείου split
-    std::string splitPath = "split.txt";
-
-    //TEST SIFT SAMPLING
-    std::vector<float> descriptors(10 * kSiftDim, 1.0f);
-    std::vector<float> sample = sampleDescriptors(descriptors, 3, rng);
-
-    if (sample.size() != 3 * kSiftDim) {
-        std::cerr << "SIFT: FAIL\n";
-        return 1;
-    }
-    std::cout << "SIFT: PASS\n";
-
-    //TEST 1: Εκπαίδευση vocabulary
-    int K = 8;
-    int S = 5;
-    unsigned seed = 42;
-    std::string cachePath = "data/test_vocab.bin";
-
-    std::vector<float> vocab, loadedVocab;
-    VocabInfo info, loadedInfo;
-
-    if (!trainOrLoadVocabulary(hpPath, splitPath, K, S, seed,
-                               cachePath, vocab, info, error)) {
-        std::cerr << "Vocabulary: FAIL - " << error << '\n';
-        return 1;
-    }
-
-    //TEST 2: Φόρτωση vocabulary από cache
-    error.clear();
-    if (!trainOrLoadVocabulary(hpPath, splitPath, K, S, seed,
-                               cachePath, loadedVocab, loadedInfo, error) ||
-        !loadedInfo.fromCache || loadedVocab != vocab) {
-        std::cerr << "Vocabulary: FAIL - " << error << '\n';
-        return 1;
-    }
-    std::cout << "Vocabulary: PASS\n";
-
-    //TEST 3: Αποθήκευση και φόρτωση BoVW cache
-    BovwCache testCache;
-    testCache.path = "data/test_bovw.bin";
-    testCache.label = "test";
-    testCache.K = 3;
-    testCache.S = 5;
-    testCache.seed = 42;
-    testCache.siftConfig = siftConfigId();
-
-    //Δοκιμαστικά hashes των 16 bytes
-    testCache.vocabHash = std::string(16, 'a');
-    testCache.splitHash = std::string(16, 'b');
-
-    //Δημιουργία πίνακα για ένα BoVW διάνυσμα
-    testCache.vectors = Matrix(1, 3);
-    testCache.vectors.data = {0.2f, 0.3f, 0.5f};
-
-    //Προσθήκη μιας εγγραφής εικόνας
-    BovwCache::Entry entry;
-    entry.fileSize = 1234;
-    entry.row = 0;
-    testCache.entries.push_back(entry);
-
-    BovwCache loadedCache = testCache;
-    loadedCache.entries.clear();
-    loadedCache.vectors = Matrix(0, 3);
-
-    error.clear();
-    if (!saveBovwCache(testCache, error) ||
-        !loadBovwCache(loadedCache, error)) {
-        std::cerr << "BoVW cache: FAIL - " << error << '\n';
-        return 1;
-    }
-
-    //Έλεγχος ότι τα δεδομένα της cache δεν άλλαξαν
-    if (loadedCache.vectors.rows != testCache.vectors.rows ||
-        loadedCache.vectors.cols != testCache.vectors.cols ||
-        loadedCache.vectors.data != testCache.vectors.data ||
-        loadedCache.entries.size() != testCache.entries.size() ||
-        loadedCache.entries[0].fileSize != testCache.entries[0].fileSize ||
-        loadedCache.entries[0].row != testCache.entries[0].row) {
-        std::cerr << "BoVW cache: FAIL\n";
-        return 1;
-    }
-    std::cout << "BoVW cache: PASS\n";
-
-    //TEST 7: Αρχικοποίηση των πινάκων αναζήτησης
-    SearchData testData;
-    initIfNew(testData, 3);
-
-    //Έλεγχος των διαστάσεων των πινάκων
-    if (testData.database.rows != 0 || testData.database.cols != 3 ||
-        testData.queries.rows != 0 || testData.queries.cols != 3) {
-        std::cerr << "InitIfNew: FAIL\n";
-        return 1;
-    }
-    std::cout << "InitIfNew: PASS\n";
-
-    std::cout << "\nALL TESTS PASSED\n";
-    return 0;
-
-    //4. Execute queries
-
-    //5. Evaluate results
-
-    //6. wrhite output
+	// Εμφάνιση του μέσου χρόνου αναζήτησης
+	std::cout << "Average query time: " << run.meanMs << " ms (mean of "
+	          << run.repMs.size() << " repetition(s) of the query set)\n";
+	// Εμφάνιση των queries με λιγότερα από 10 αποτελέσματα
+	std::cout << "Queries with fewer than " << kTopK << " results: " << fewer
+	          << " of " << data.queries.rows << '\n';
+	std::cout << "Results written to " << cfg.out << '\n';
+	return 0;
 }
