@@ -1,8 +1,15 @@
-
 #include "ivf.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
+#include <utility>
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -101,6 +108,110 @@ std::vector<int> rankCandidates(const Matrix& database, const float* query,
 	for (size_t i = 0; i < k; ++i)
 		top[i] = ranked[i].second;  // κραταμε μονο τους δεικτες
 	return top;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Μορφη του αρχειου cache (δυαδικη, με τη σειρα που γραφονται τα πεδια):
+//   8 bytes   "IVFCACHE" (magic, για να αναγνωριζεται οτι ειναι αρχειο αυτου
+//   του προγραμματος) int32     εκδοση της μορφης (kIvfFormatVersion) ταυτοτητα
+//   method, K, n, kclusters, M, nbits, S, D, seed, set, splitHash, dbHash,
+//   siftConfig
+//             (τα strings ως uint32 μηκος + bytes, οι ακεραιοι ως int32, το
+//             seed ως uint32)
+//   coarse    int32 rows, int32 cols, μετα rows * cols floats
+//   codebooks μονο για PQ: M πινακες με την ιδια διαταξη (int32 rows, int32
+//   cols, floats)
+// Οι λιστες και οι κωδικοι ΔΕΝ αποθηκευονται: ξαναχτιζονται απο τη βαση με τη
+// fillLists
+// ---------------------------------------------------------------------------------------------------------
+
+const char kMagic[8] = {'I', 'V', 'F', 'C', 'A', 'C', 'H', 'E'};
+
+// Γραφουν ενα signed ακεραιο 32 bit, εναν unsigned 32 bit και ενα string (μηκος
+// + περιεχομενο) στο stream. Τα bytes γραφονται οπως ειναι στη μνημη, αρα το
+// αρχειο διαβαζεται σωστα μονο σε μηχανημα ιδιου endianness
+void putInt(std::ostream& out, int32_t v) {
+	out.write(reinterpret_cast<const char*>(&v), sizeof v);
+}
+void putUInt(std::ostream& out, uint32_t v) {
+	out.write(reinterpret_cast<const char*>(&v), sizeof v);
+}
+void putString(std::ostream& out, const std::string& s) {
+	putUInt(out, static_cast<uint32_t>(
+	                 s.size()));  // πρωτα το μηκος, για να ξερει ο αναγνωστης
+					              // ποσα bytes να διαβασει
+	out.write(s.data(),
+	          static_cast<std::streamsize>(s.size()));  // μετα οι χαρακτηρες
+}
+// Γραφει εναν πινακα: διαστασεις (rows, cols) και μετα ολα τα floats
+// γραμμη-γραμμη, οπως ειναι στη μνημη.
+void putMatrix(std::ostream& out, const Matrix& m) {
+	putInt(out, m.rows);
+	putInt(out, m.cols);
+	out.write(reinterpret_cast<const char*>(m.data.data()),
+	          static_cast<std::streamsize>(m.data.size() * sizeof(float)));
+}
+
+// Αναγνωστης αρχειου που ΔΕΝ εμπιστευεται το περιεχομενο: θυμαται ποσα bytes
+// απομενουν και καθε αναγνωση ελεγχεται απεναντι σε αυτα πριν γινει. Ετσι ενα
+// κομενο η αλλοιωμενο αρχειο δεν προκαλει τεραστια δεσμευση μνημης ουτε
+// αναγνωση εκτος οριων, αλλα αποτυγχανει καθαρα με μηνυμα σφαλματος.
+struct Reader {
+	std::ifstream in;
+	size_t remaining = 0;  // bytes που δεν εχουν διαβαστει ακομα
+
+	explicit Reader(const std::string& path) : in(path, std::ios::binary) {
+		if (!in) return;  // αν δεν ανοιξε, ο καλων το ελεγχει με το `!r.in`
+		in.seekg(0, std::ios::end);  // παμε στο τελος για να μαθουμε το μεγεθος
+		remaining = static_cast<size_t>(in.tellg());
+		in.seekg(0);  // και επιστρεφουμε στην αρχη
+	}
+	// Διαβαζει ακριβως n bytes στο dst. Αποτυγχανει (false) αν το αρχειο εχει
+	// λιγοτερα bytes.
+	bool bytes(void* dst, size_t n) {
+		if (n > remaining) return false;
+		in.read(static_cast<char*>(dst), static_cast<std::streamsize>(n));
+		if (!in) return false;
+		remaining -= n;
+		return true;
+	}
+	bool getInt(int32_t& v) { return bytes(&v, sizeof v); }
+	bool getUInt(uint32_t& v) { return bytes(&v, sizeof v); }
+	// Διαβαζει string που γραφτηκε απο την putString. Το μηκος ελεγχεται πριν
+	// το resize: ενα φθαρμενο μηκος (π.χ. 4 δισεκατομμυρια) θα εκανε αλλιως μια
+	// τεραστια δεσμευση
+	bool getString(std::string& s) {
+		uint32_t n = 0;
+		if (!getUInt(n) || n > remaining) return false;
+		s.resize(n);
+		return n == 0 || bytes(&s[0], n);
+	}
+};
+
+// Αποτελεσμα της αναγνωσης ενος πινακα: επιτυχια η ο λογος αποτυχιας (ωστε ο
+// καλων να δωσει σωστο μηνυμα).
+enum class MatrixRead { Ok, Truncated, WrongSize, NotFinite };
+
+// Διαβαζει εναν πινακα που περιμενουμε να εχει ακριβως rows x cols. Οι
+// διαστασεις που ειναι γραμμενες στο αρχειο πρεπει να συμφωνουν με τις
+// αναμενομενες, και ελεγχονται ΠΡΙΝ γινει οποιαδηποτε δεσμευση μνημης
+MatrixRead getMatrix(Reader& r, int rows, int cols, Matrix& m) {
+	int32_t rr = 0, cc = 0;
+	if (!r.getInt(rr) || !r.getInt(cc))
+		return MatrixRead::Truncated;  // δεν υπαρχουν καν οι διαστασεις
+	if (rr != rows || cc != cols)
+		return MatrixRead::WrongSize;  // αλλο σχημα απο το αναμενομενο
+	const size_t count = static_cast<size_t>(rows) * cols;
+	// Αν τα floats που θελουμε δεν χωρουν στα bytes που απομενουν, το αρχειο
+	// ειναι κομενο.
+	if (count > r.remaining / sizeof(float)) return MatrixRead::Truncated;
+	m = Matrix(rows, cols);
+	if (count > 0 && !r.bytes(m.data.data(), count * sizeof(float)))
+		return MatrixRead::Truncated;
+	for (float v : m.data)  // ενα centroid με NaN η απειρο θα χαλουσε σιωπηλα
+	                        // ολες τις αποστασεις
+		if (!std::isfinite(v)) return MatrixRead::NotFinite;
+	return MatrixRead::Ok;
 }
 
 }  // namespace
@@ -310,4 +421,300 @@ std::vector<int> ivfFlatSearch(const IvfIndex& index, const Matrix& database,
 	// υποψηφιοι ειναι ολη η βαση, οποτε το αποτελεσμα ισουται με το exact
 	// search.
 	return rankCandidates(database, query, candidates, topK);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// 4. Cache
+// ---------------------------------------------------------------------------------------------------------
+
+bool makeIvfMeta(const Config& cfg, const Matrix& database, int kclusters,
+                 IvfMeta& meta, std::string& error) {
+	// Συμπληρωνει την ταυτοτητα της εκτελεσης: τι μεθοδος, σε τι δεδομενα και
+	// με ποιες παραμετρους θα εκπαιδευτει το index. Μια cache επιτρεπεται να
+	// φορτωθει μονο αν ΟΛΑ αυτα ταιριαζουν
+	meta = IvfMeta();
+	meta.method = cfg.method;
+	meta.K = database.cols;
+	meta.n = database.rows;
+	meta.kclusters = kclusters;
+	meta.M = cfg.method == "ivfpq"
+	             ? cfg.M
+	             : 0;  // οι παραμετροι PQ εχουν νοημα μονο για ivfpq
+	meta.nbits = cfg.method == "ivfpq" ? cfg.nbits : 0;
+	meta.S = cfg.S;
+	meta.D = cfg.D;
+	meta.seed = cfg.seed;
+	meta.set = cfg.set;
+	meta.siftConfig =
+	    siftConfigId();  // οι descriptors που εδωσαν τα διανυσματα της βασης
+	// Αποτυπωμα των ιδιων των τιμων της βασης: αν αλλαξει εστω ενα float, η
+	// cache αποριπτεται
+	meta.dbHash =
+	    hashBytes(database.data.data(), database.data.size() * sizeof(float));
+	// Αποτυπωμα του split.txt· αποτυγχανει (και επιστρεφει false με μηνυμα) αν
+	// το αρχειο δεν διαβαζεται
+	return fileHash(cfg.split, meta.splitHash, error);
+}
+
+bool saveIvf(const std::string& path, const IvfIndex& index,
+             const IvfMeta& meta, std::string& error) {
+	// Ελεγχος συνεπειας: το index που αποθηκευουμε πρεπει να ταιριαζει με την
+	// ταυτοτητα που γραφουμε.
+	if (index.coarse.rows != meta.kclusters || index.coarse.cols != meta.K ||
+	    (index.M > 0 &&
+	     index.codebooks.size() != static_cast<size_t>(index.M))) {
+		error = "index does not match the metadata";
+		return false;
+	}
+	// Γραφουμε πρωτα σε προσωρινο αρχειο και στο τελος το μετονομαζουμε. Ετσι,
+	// αν το προγραμμα διακοπει στη μεση, δεν μενει μισογραμμενη cache με το
+	// τελικο ονομα (που την επομενη φορα θα φαινοταν φθαρμενη)..
+	const std::string tmp = path + ".tmp";
+	{
+		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+		if (!out) {
+			error = "cannot write '" + tmp + "'";
+			return false;
+		}
+		out.write(kMagic, sizeof kMagic);  // 1. magic
+		putInt(out, kIvfFormatVersion);    // 2. εκδοση μορφης
+		putString(out, meta.method);  // 3. ταυτοτητα, με την ιδια σειρα που
+		                              // διαβαζεται στη loadIvf
+		putInt(out, meta.K);
+		putInt(out, meta.n);
+		putInt(out, meta.kclusters);
+		putInt(out, meta.M);
+		putInt(out, meta.nbits);
+		putInt(out, meta.S);
+		putInt(out, meta.D);
+		putUInt(out, meta.seed);
+		putString(out, meta.set);
+		putString(out, meta.splitHash);
+		putString(out, meta.dbHash);
+		putString(out, meta.siftConfig);
+		putMatrix(out, index.coarse);  // 4. coarse centroids
+		if (index.M > 0)               // 5. τα M codebooks, μονο για PQ
+			for (const Matrix& book : index.codebooks) putMatrix(out, book);
+		out.flush();
+		if (!out) {  // π.χ. γεματος δισκος: κανενα απο τα write παραπανω δεν
+		             // επεστρεφε σφαλμα μονο του
+			error = "cannot write '" + tmp + "'";
+			return false;
+		}
+	}  // εδω κλεινει το αρχειο, πριν τη μετονομασια
+	std::error_code ec;
+	fs::rename(
+	    tmp, path,
+	    ec);  // ατομικη αντικατασταση: η υπαρχει ολκληρη η νεα cache η τιποτα
+	if (ec) {
+		error = "cannot move '" + tmp + "' to '" + path + "': " + ec.message();
+		return false;
+	}
+	return true;
+}
+
+bool loadIvf(const std::string& path, const IvfMeta& want,
+             const Matrix& database, IvfIndex& index, std::string& error) {
+	const std::string bad = "index cache '" + path +
+	                        "' ";  // κοινο προθεμα ολων των μηνυματων σφαλματος
+	std::error_code ec;
+	if (!fs::exists(path, ec)) {
+		error = bad + "does not exist";
+		return false;
+	}
+	Reader r(path);
+	if (!r.in) {
+		error = bad + "cannot be opened or parsed (corrupted?)";
+		return false;
+	}
+	// Μικρος βοηθος για τα σφαλματα φθορας: γραφει το μηνυμα και επιστρεφει
+	// false.
+	auto corrupted = [&](const std::string& why) {
+		error = bad + "is corrupted: " + why;
+		return false;
+	};
+
+	// --- Βημα 1: magic και εκδοση. Ενα αρχειο που δεν ξεκινα με "IVFCACHE" δεν
+	// ειναι cache αυτου του προγραμματος
+	char magic[sizeof kMagic];
+	if (!r.bytes(magic, sizeof magic) ||
+	    std::memcmp(magic, kMagic, sizeof magic) != 0)
+		return corrupted("not an IVF cache file");
+	int32_t version = 0;
+	if (!r.getInt(version)) return corrupted("missing field 'version'");
+	if (version != kIvfFormatVersion) {  // αλλη εκδοση μορφης: ειναι ασυμβατη,
+	                                     // οχι φθαρμενη
+		error = bad + "is incompatible: format version is " +
+		        std::to_string(version) + " in the file but " +
+		        std::to_string(kIvfFormatVersion) + " is required";
+		return false;
+	}
+
+	// --- Βημα 2: διαβαζουμε ολοκληρη την ταυτοτητα που ειναι γραμμενη στο
+	// αρχειο.
+	IvfMeta got;
+	int32_t K = 0, n = 0, kc = 0, M = 0, nbits = 0, S = 0, D = 0;
+	uint32_t seed = 0;
+	if (!r.getString(got.method) || !r.getInt(K) || !r.getInt(n) ||
+	    !r.getInt(kc) || !r.getInt(M) || !r.getInt(nbits) || !r.getInt(S) ||
+	    !r.getInt(D) || !r.getUInt(seed) || !r.getString(got.set) ||
+	    !r.getString(got.splitHash) || !r.getString(got.dbHash) ||
+	    !r.getString(got.siftConfig))
+		return corrupted("truncated header");  // το αρχειο τελειωνει πριν απο
+		                                       // το τελος της ταυτοτητας
+	got.K = K, got.n = n, got.kclusters = kc, got.M = M, got.nbits = nbits,
+	got.S = S, got.D = D, got.seed = seed;
+
+	// --- Βημα 3: συγκριση με αυτο που ζητηθηκε. Καθε διαφορα σημαινει οτι η
+	// cache ειναι απο αλλη εκτελεση και δεν πρεπει να χρησιμοποιηθει· το μηνυμα
+	// λεει ποιο πεδιο διαφερει και με ποιες τιμες
+	auto mismatch = [&](const std::string& what, const std::string& have,
+	                    const std::string& wanted) {
+		error = bad + "is incompatible: " + what + " is " + have +
+		        " in the file but " + wanted + " was requested";
+		return false;
+	};
+	if (got.method != want.method)
+		return mismatch("method", got.method, want.method);
+	if (got.K != want.K)
+		return mismatch("K", std::to_string(got.K), std::to_string(want.K));
+	if (got.n != want.n)
+		return mismatch("database size n", std::to_string(got.n),
+		                std::to_string(want.n));
+	if (got.kclusters != want.kclusters)
+		return mismatch("kclusters", std::to_string(got.kclusters),
+		                std::to_string(want.kclusters));
+	if (got.M != want.M)
+		return mismatch("M", std::to_string(got.M), std::to_string(want.M));
+	if (got.nbits != want.nbits)
+		return mismatch("nbits", std::to_string(got.nbits),
+		                std::to_string(want.nbits));
+	if (got.S != want.S)
+		return mismatch("S", std::to_string(got.S), std::to_string(want.S));
+	if (got.D != want.D)
+		return mismatch("D", std::to_string(got.D), std::to_string(want.D));
+	if (got.seed != want.seed)
+		return mismatch("seed", std::to_string(got.seed),
+		                std::to_string(want.seed));
+	if (got.set != want.set) return mismatch("set", got.set, want.set);
+	if (got.splitHash != want.splitHash)
+		return mismatch("split.txt hash", got.splitHash, want.splitHash);
+	if (got.siftConfig != want.siftConfig)
+		return mismatch("SIFT configuration", got.siftConfig, want.siftConfig);
+	if (got.dbHash != want.dbHash)
+		return mismatch("database fingerprint", got.dbHash, want.dbHash);
+
+	// --- Βημα 4: η ταυτοτητα ταιριαζει με το αιτημα, αρα τα μεγεθη που
+	// περιμενουμε ειναι αυτα μιας εγκυρης εκτελεσης. Ο,τι δεν συμφωνει με αυτα
+	// (π.χ. kclusters εκτος οριων) σημαινει φθορα του αρχειου.
+	if (database.rows != got.n || database.cols != got.K || got.kclusters < 1 ||
+	    got.kclusters > got.n)
+		return corrupted("sizes do not match the database");
+	if (got.M < 0 ||
+	    (got.M > 0 && (got.K % got.M != 0 || got.nbits < 1 || got.nbits > 16)))
+		return corrupted("invalid PQ parameters");
+
+	// --- Βημα 5: τα coarse centroids. Ο πινακας πρεπει να ειναι ακριβως
+	// kclusters x K και με πεπερασμενες τιμες.
+	IvfIndex loaded;  // χτιζουμε σε τοπικο index και το αντιγραφουμε στο τελος,
+	                  // ωστε μια αποτυχια να μην αλλαξει το index
+	switch (getMatrix(r, got.kclusters, got.K, loaded.coarse)) {
+		case MatrixRead::Ok:
+			break;
+		case MatrixRead::NotFinite:
+			return corrupted("centroids contain NaN or infinite values");
+		default:
+			return corrupted("coarse centroids are not " +
+			                 std::to_string(got.kclusters) + " x " +
+			                 std::to_string(got.K));
+	}
+	loaded.M = got.M;
+	loaded.nbits = got.nbits;
+	loaded.dsub = got.M > 0 ? got.K / got.M : 0;
+
+	// --- Βημα 6: για PQ διαβαζουμε τα M codebooks, καθενα 2^nbits x dsub.
+	for (int i = 0; i < got.M; ++i) {
+		Matrix book;
+		switch (getMatrix(r, 1 << got.nbits, loaded.dsub, book)) {
+			case MatrixRead::Ok:
+				break;
+			case MatrixRead::NotFinite:
+				return corrupted("codebooks contain NaN or infinite values");
+			default:
+				return corrupted("codebooks are not " +
+				                 std::to_string(got.M << got.nbits) + " x " +
+				                 std::to_string(loaded.dsub));
+		}
+		loaded.codebooks.push_back(std::move(book));
+	}
+	// Μετα το τελευταιο πεδιο δεν πρεπει να περισσευουν bytes· αλλιως το αρχειο
+	// εχει αλλοιωθει η ειναι αλλης μορφης
+	if (r.remaining != 0) return corrupted("unexpected data after the index");
+
+	// --- Βημα 7: ξαναχτιζουμε τις λιστες και τους κωδικους απο τη βαση και
+	// παραδιδουμε το ετοιμο index.
+	fillLists(loaded, database);
+	index = std::move(loaded);
+	return true;
+}
+
+std::string ivfCachePath(const Config& cfg, int kclusters) {
+	// Το όνομα του αρχείου περιέχει τις βασικές παραμέτρους της εκτέλεσης, ώστε
+	// διαφορετικές ρυθμίσεις να έχουν διαφορετικά αρχεία. Η αυστηρή
+	// διαφοροποίηση γίνεται πάντως από την ταυτότητα μέσα στο αρχείο.
+	std::string name = "data/ivf_" + cfg.method + "_" + siftConfigId() + "_K" +
+	                   std::to_string(cfg.vocab) + "_S" +
+	                   std::to_string(cfg.S) + "_D" + std::to_string(cfg.D) +
+	                   "_" + cfg.set + "_seed" + std::to_string(cfg.seed) +
+	                   "_kc" + std::to_string(kclusters);
+	if (cfg.method == "ivfpq")
+		name += "_M" + std::to_string(cfg.M) + "_b" +
+		        std::to_string(cfg.nbits);  // μονο για PQ
+	return name + ".bin";
+}
+
+bool prepareIvf(const Config& cfg, const Matrix& database, IvfIndex& index,
+                bool& fromCache, double& seconds, std::string& error) {
+	const auto start =
+	    std::chrono::steady_clock::now();  // μετραμε τον χρονο ετοιμασιας
+		                                   // (φορτωση η εκπαιδευση)
+	const bool pq = cfg.method == "ivfpq";
+	// Αν το kclusters δεν δοθηκε (0), το resolveKclusters επιλεγει αυτοματα
+	// ceil(sqrt(n))
+	const int kclusters = resolveKclusters(cfg, database.rows);
+	// Ελεγχος παραμετρων πριν απο οποιαδηποτε εκπαιδευση η αναγνωση αρχειου:
+	// για PQ ολοι οι ελεγχοι της checkIvfPqParams, για IVFFlat μονο οτι το
+	// kclusters δεν ξεπερνα το μεγεθος της βασης
+	if (pq ? !checkIvfPqParams(database.cols, database.rows, kclusters, cfg.M,
+	                           cfg.nbits, error)
+	       : kclusters > database.rows) {
+		if (!pq)
+			error = "kclusters (" + std::to_string(kclusters) +
+			        ") exceeds the database size (" +
+			        std::to_string(database.rows) + ")";
+		return false;
+	}
+	IvfMeta
+	    meta;  // ταυτοτητα της εκτελεσης (και αποτυπωματα split.txt / βασης)
+	if (!makeIvfMeta(cfg, database, kclusters, meta, error)) return false;
+	const std::string path = ivfCachePath(cfg, kclusters);
+
+	std::error_code ec;
+	fromCache = fs::exists(path, ec);
+	if (fromCache) {
+		// Υπαρχει cache: φορτωνεται. Αν δεν ταιριαζει η ειναι φθαρμενη ειναι
+		// ΣΦΑΛΜΑ, δεν ξαναεκπαιδευουμε σιωπηλα, ωστε ο χρηστης να μαθει οτι
+		// εχει στα χερια του ασυμβατο αρχειο
+		if (!loadIvf(path, meta, database, index, error)) return false;
+	} else {
+		// Δεν υπαρχει cache: εκπαιδευουμε με τον k-means μας και αποθηκευουμε
+		// για τις επομενες εκτελεσεις..
+		index = pq ? buildIvfPq(database, kclusters, cfg.M, cfg.nbits, cfg.seed)
+		           : buildIvfFlat(database, kclusters, cfg.seed);
+		if (!saveIvf(path, index, meta, error)) return false;
+	}
+	seconds =
+	    std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
+	        .count();
+	return true;
 }
