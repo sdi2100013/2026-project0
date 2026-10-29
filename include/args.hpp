@@ -24,7 +24,7 @@ struct Config {
     std::string timing;
 
     std::string method;   //Παίρνει τιμές "exact", "lsh", "hypercube", "ivfflat", "ivfpq"
-
+   
     //Παράμετροι μεθόδων.
     int k = 4;            //lsh
     int L = 5;            // lsh
