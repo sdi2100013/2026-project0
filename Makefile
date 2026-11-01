@@ -5,12 +5,16 @@ LDFLAGS :=
 LDLIBS :=
 TARGET := search
 TEST_TARGET := build/test/test
-#OpenCV 4.2.0
-#OPENCV_CXXFLAGS := $(shell pkg-config --cflags opencv4 2>/dev/null)
-#OPENCV_LIBS := $(shell pkg-config --libs opencv4 2>/dev/null)
-#OpenCV 4.10.0
+# Use the locally installed OpenCV 4.10 build only on WSL.
+WSL := $(shell uname -r 2>/dev/null | grep -qiE 'microsoft|wsl' && echo 1)
+ifeq ($(WSL),1)
 OPENCV_CXXFLAGS := -I/opt/opencv-4.10/include/opencv4
 OPENCV_LIBS := -L/opt/opencv-4.10/lib -lopencv_features2d -lopencv_imgcodecs -lopencv_imgproc -lopencv_flann -lopencv_core -Wl,-rpath,/opt/opencv-4.10/lib
+else
+# OpenCV 4.2.0
+OPENCV_CXXFLAGS := $(shell pkg-config --cflags opencv4 2>/dev/null)
+OPENCV_LIBS := $(shell pkg-config --libs opencv4 2>/dev/null)
+endif
 BUILD_DIR := build
 SOURCES := main/search.cpp $(wildcard src/*.cpp)
 OBJECTS := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SOURCES))

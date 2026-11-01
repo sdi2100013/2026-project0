@@ -1,6 +1,7 @@
 *.o
 *.d
-search
 build/
 data/
 cache/
+*.txt
+search
