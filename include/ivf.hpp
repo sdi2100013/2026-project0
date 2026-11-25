@@ -8,9 +8,6 @@
 #include "args.hpp"
 #include "kmeans.hpp"  // Matrix, kmeans, nearestCentroid
 
-std::string siftConfigId();
-std::string hashBytes(const void* data, size_t size);
-bool fileHash(const std::string& path, std::string& hash, std::string& error);
 
 constexpr int kIvfTopK = 10;  // ιδιο με το kTopK
 

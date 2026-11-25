@@ -9,6 +9,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "sift_extract.hpp"  // siftConfigId
+#include "vocabulary.hpp"   // hashBytes, fileHash
+
 namespace fs = std::filesystem;
 
 namespace {
