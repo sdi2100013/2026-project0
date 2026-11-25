@@ -32,10 +32,9 @@ ImageKey queryKey(const std::string& sequence);
 bool keyFromDbId(const std::string& dbId, ImageKey& key, std::string& error);
 
 
-//Cache στον δίσκο (ένα δυαδι κό αρχείο ανά ηκόνα): περιέχει το id και την πιγή, το
-//siftConfigId(), το μέγεθος του αρχείου εικόνας, τις διαστάσεις, τα keypoints, τους
-//descriptors και ένα checksum. Αρχείο που δεν ταιριάζει με την εικόνα ή τις παραμέτρους
-//SIFT, ή είναι ελειπές ή αλιωμένο, απορρίπτετε και αναδημιουργείτε.
+//Τα χαρακτηριστικά μιας εικόνας: (x_i, y_i, descriptor_i), i = 0..N-1, με τη
+//σειρά που τα επέστρεψε το SIFT. Οι συντεταγμένες είναι σε pixels της
+//αρχικής εικόνας (KeyPoint::pt, float ακριβώς διευρυμένο σε double).
 struct ImageFeatures {
     ImageKey key;
     //διαστάσεις της αρχικής ηκόνας.

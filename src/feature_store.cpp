@@ -54,6 +54,37 @@ bool isNameChar(char c) {
 }
 
 
+//ανάγνωση διαδικών δεδομένων από buffer με έλεγχο ορίων
+struct Reader {
+    const std::vector<char>& buffer;
+    size_t pos = 0;
+    //ανάγνωση Ν bytes και μετακίνηση της θέσης ανάγνωσης
+    bool take(void* dst, size_t n) {
+        if (pos > buffer.size() || buffer.size() - pos < n) {
+            return false;
+        }
+        std::memcpy(dst, buffer.data() + pos, n);
+        pos += n;
+        return true;
+    }
+    //ανάγνωση μιας τιμής ανάλογα με το μέγεθος του τύπου της
+    template <class T>
+    bool get(T& value) {
+        return take(&value, sizeof(value));
+    }
+    //ανάγνωση string από το μήκος και τους χαρακτήρες του
+    bool str(std::string& s) {
+        uint32_t n = 0;
+        if (!get(n) || n > 256 || buffer.size() - pos < n) {
+            return false;
+        }
+        s.assign(buffer.data() + pos, n);
+        pos += n;
+        return true;
+    }
+};
+
+
 //Προσθήκη της διαδικής αναπαράστασης μιας τιμής στο buffer.
 template <class T>
 void put(std::vector<char>& buffer, const T& value) {
@@ -192,3 +223,131 @@ static bool saveFeatures(const std::string& path, const ImageFeatures& f, std::s
     return true;
 }
 
+//Ανάγνωση των αποθηκευμένων χαρακτηριστηκών μιας εικόνας.
+static bool loadFeatures(const std::string& path, const ImageKey& key, uint64_t expectedImageBytes, ImageFeatures& out, std::string& error) {
+    const std::string errorPrefix = "feature cache '" + path + "' ";
+    //ανοιγμα του διαδικού αρχείου.
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        error = errorPrefix + "cannot be opened";
+        return false;
+    }
+    //ανάγνωση ολόκληρου του αρχείου στο buffer.
+    std::vector<char> buffer((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    Reader reader{buffer};
+    // Μεταβλητές για την ανάγνωση της επικεφαλίδας.
+    char magic[sizeof(kMagic)];
+    uint32_t version = 0;
+    uint32_t dim = 0;
+    uint8_t source = 0;
+    std::string id;
+    std::string config;
+    uint64_t imageBytes = 0;
+    uint64_t count = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    //έλεγχος του αναγνωριστικού της μορφής του αρχείου.
+    if (!reader.take(magic, sizeof(magic)) || std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) {
+        error = errorPrefix + "is corrupted (not a feature cache)";
+        return false;
+    }
+    //ελεγχος συμβατότητας της έκδοσης του αρχείου.
+    if (!reader.get(version) || version != kFeatureFormatVersion) {
+        error = errorPrefix + "has an incompatible format version";
+        return false;
+    }
+    //Ανάγνωση των υπόλοιπων πεδίων της επικεφαλίδας.
+    if (!reader.get(source) || !reader.str(id) || !reader.str(config) || !reader.get(imageBytes) ||
+        !reader.get(width) || !reader.get(height) || !reader.get(dim) || !reader.get(count)) {
+        error = errorPrefix + "is corrupted (truncated header)";
+        return false;
+    }
+    //ελεγχος ότι τα χαρακτηριστηκά ανήκουν στη ζητούμενη εικόνα.
+    if (source != static_cast<uint8_t>(key.source) || id != key.id) {
+        error = errorPrefix + "belongs to another image ('" + id + "')";
+        return false;
+    }
+    //ελεγχος συμβατότητας των ρυθμίσεων του SIFT.
+    if (config != siftConfigId()) {
+        error = errorPrefix + "was made with another SIFT configuration (" + config + ")";
+        return false;
+    }
+    //έλεγχος αν έχει μεταβληθεί το μέγεθος του αρχείου εικόνας.
+    if (imageBytes != expectedImageBytes) {
+        error = errorPrefix + "does not match the image file (size changed)";
+        return false;
+    }
+    //έλεγχος της διάστασης των descriptors.
+    if (dim != kDim) {
+        error = errorPrefix + "has descriptor dimension " + std::to_string(dim);
+        return false;
+    }
+    //'εεγχος των διαστάσεων της ηκόνας και του πλήθους των keypoints.
+    if (width <= 0 || height <= 0 || count > kMaxCount) {
+        error = errorPrefix + "has invalid image size or keypoint count";
+        return false;
+    }
+    //υπολογισμός του αναμενώμενου μεγέθους των χαρακτηριστηκών.
+    const size_t n = static_cast<size_t>(count);
+    const size_t payloadSize = n * (2 + kSiftDim) * sizeof(float);
+    //ελεγχος του μεγέθους των υπόλιπων δεδομένων του αρχείου
+    if (buffer.size() - reader.pos != payloadSize + kChecksumSize) {
+        error = errorPrefix + "is corrupted (wrong length for " + std::to_string(count) + " keypoints)";
+        return false;
+    }
+    //υπολογισμός του checksum των αποθηκευμένων χαρακτηριστικών
+    const std::string checksum = hashBytes(buffer.data() + reader.pos, payloadSize);
+    //σύγκριση του υπολογισμένου με το αποθηκευμένο checksum
+    if (std::memcmp(checksum.data(), buffer.data() + reader.pos + payloadSize, kChecksumSize) != 0) {
+        error = errorPrefix + "is corrupted (checksum mismatch)";
+        return false;
+    }
+    //αρχικοποίηση της δομής με τα στοιχεία της εικόνας.
+    ImageFeatures f;
+    f.key = key;
+    f.width = width;
+    f.height = height;
+    f.imageBytes = imageBytes;
+    //δέσμευση χώρου για τις συντεταγμένες και τους descriptors.
+    f.x.resize(n);
+    f.y.resize(n);
+    f.descriptors = Matrix(static_cast<int>(n), kSiftDim);
+    //προσωρινός πίνακας ανάγνωσης των συντεταγμένων.
+    std::vector<float> tmp(n);
+    //ανάγνωση πρώτα των x και στη συνέχεια των y συντεταγμένων.
+    for (std::vector<double>* coords : {&f.x, &f.y}) {
+        if (n > 0 && !reader.take(tmp.data(), n * sizeof(float))) {
+            error = errorPrefix + "has truncated keypoint coordinates";
+            return false;
+        }
+        int limit;
+        if (coords == &f.x) {
+            limit = width;
+        } else {
+            limit = height;
+        }
+        // Έλεγχος εγκυρότητας κάθε συντεταγμένης.
+        for (size_t i = 0; i < n; ++i) {
+            if (!std::isfinite(tmp[i]) || tmp[i] < 0 || tmp[i] > limit) {
+                error = errorPrefix + "has a keypoint outside the image";
+                return false;
+            }
+            (*coords)[i] = tmp[i];
+        }
+    }
+    //ανάγνωση των αποθηκευμένων SIFT descriptors.
+    if (n > 0 && !reader.take(f.descriptors.data.data(), n * kSiftDim * sizeof(float))) {
+        error = errorPrefix + "has truncated descriptors";
+        return false;
+    }
+    //έλεγχος εγκυρότητας των τιμών των descriptors.
+    for (float value : f.descriptors.data) {
+        if (!std::isfinite(value)) {
+            error = errorPrefix + "has non-finite descriptor values";
+            return false;
+        }
+    }
+    //μεταφορά των χαρακτηριστικών στη δομή εξόδου.
+    out = std::move(f);
+    return true;
+}
