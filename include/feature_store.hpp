@@ -52,3 +52,30 @@ struct ImageFeatures {
         return static_cast<int>(x.size());
     }
 };
+
+
+//Διαχείριση της αποθήκευσης και ανάκτησης των SIFT χαρακτηριστικών.
+class FeatureStore {
+    public:
+        //αρχικοποίηση των διαδρομών των datasets και του cache.
+        FeatureStore(std::string hpRoot, std::string mirRoot, std::string cacheDir = "data/features");
+        // Ανάκτηση των χαρακτηριστικών από τη μνήμη ή τον δίσκο.
+        // Αν δεν υπάρχουν έγκυρα χαρακτηριστικά, πραγματοποιείται εξαγωγή SIFT.
+        // Ο δείκτης ισχύει μέχρι την εκκαθάριση της μνήμης ή την καταστροφή του αντικειμένου.
+        bool get(const ImageKey& key, const ImageFeatures*& out, std::string& error);
+        // Εκκαθάριση των χαρακτηριστικών που βρίσκονται στη μνήμη.
+        void clearMemory() {
+            memory_.clear();
+        }
+    private:
+        //εύρεση της διαδρομής του αρχείου της εικόνας.
+        std::string imagePath(const ImageKey& key) const;
+        //εύρεση της διαδρομής του αρχείου των χαρακτηριστικών.
+        std::string cachePath(const ImageKey& key) const;
+        //Διαδρομές των datasets και του καταλόγου αποθήκευσης.
+        std::string hp_;
+        std::string mir_;
+        std::string dir_;
+        // Προσωρινή αποθήκευση των χαρακτηριστικών των εικόνων στη μνήμη.
+        std::unordered_map<std::string, ImageFeatures> memory_;
+};

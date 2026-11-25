@@ -351,3 +351,111 @@ static bool loadFeatures(const std::string& path, const ImageKey& key, uint64_t 
     out = std::move(f);
     return true;
 }
+
+
+//αρχικοποίηση των διαδρομών των datasets και του cache.
+FeatureStore::FeatureStore(std::string hpRoot, std::string mirRoot, std::string cacheDir)
+    : hp_(std::move(hpRoot)), mir_(std::move(mirRoot)), dir_(std::move(cacheDir)) {
+}
+
+
+//ευρεση της διαδρομης του αρχείου της ηκονας ανάλογα με το dataset.
+std::string FeatureStore::imagePath(const ImageKey& key) const {
+    if (key.source == ImageSource::HPatches) {
+        return hp_ + "/" + key.id + ".ppm";
+    } else {
+        return mir_ + "/" + key.id;
+    }
+}
+
+//ευρεση της διαδρομής του αρχείου αποθήκευσης των χαρακτηριστηκών.
+std::string FeatureStore::cachePath(const ImageKey& key) const {
+    const std::string base = dir_ + "/" + siftConfigId() + "/";
+    if (key.source == ImageSource::HPatches) {
+        return base + "hpatches/" + key.id + ".feat";
+    } else {
+        return base + "mirflickr/" + key.id + ".feat";
+    }
+}
+
+
+//ανάκτηση των χαρακτηριστικών μιας εικόνας.
+bool FeatureStore::get(const ImageKey& key, const ImageFeatures*& out, std::string& error) {
+    out = nullptr;
+    //'ελεγχος εγκυρότητας του αναγνωριστικού της εικόνας.
+    if (!validImageKey(key, error)) {
+        return false;
+    }
+    //δημιουργία μοναδικού κλιδιού για την αναζήτηση στη μνήμη.
+    std::string memoryKey;
+    if (key.source == ImageSource::HPatches) {
+        memoryKey = "hp:" + key.id;
+    } else {
+        memoryKey = "mir:" + key.id;
+    }
+    //Αναζητηση των χαρακτηριστηκών στη μνήμη.
+    auto it = memory_.find(memoryKey);
+    if (it != memory_.end()) {
+        out = &it->second;
+        return true;
+    }
+    //εύρεση των διαδρομών της εικόνας και του αρχείου χαρακτηριστικών.
+    const std::string image = imagePath(key);
+    const std::string cache = cachePath(key);
+    //ανάκτηση του μεγέθους του αρχείου της ηκόνας σε bytes.
+    std::error_code ec;
+    const uint64_t bytes = fs::file_size(image, ec);
+    //έλεγχος για σφάλμα κατά την ανάκτηση του μεγέθους.
+    if (ec) {
+        error = "cannot read image '" + image + "' (missing or unreadable)";
+        return false;
+    }
+    //αντικείμενο για την αποθήκευση των χαρακτηριστηκών της εικόνας.
+    ImageFeatures f;
+    std::string cacheError;
+    //έλεγχος ύπαρξης και φώρτωση των χαρακτηριστικών από τον δίσκο.
+    bool loaded = false;
+    if (fs::exists(cache, ec)) {
+        loaded = loadFeatures(cache, key, bytes, f, cacheError);
+    }
+    //αν δεν φορτώθηκαν έγκυρα χαρακτηριστικά, πραγματοποιείται εξαγωγή SIFT.
+    if (!loaded) {
+        //μεταβλητές για την εξαγωγή των SIFT χαρακτηριστικών.
+        cv::Mat gray;
+        std::vector<cv::KeyPoint> keypoints;
+        std::vector<float> descriptors;
+        //εξαγωγή των keypoints και των descriptors της εικόνας.
+        if (!extractSiftDescriptors(image, gray, keypoints, descriptors, error)) {
+            return false;
+        }
+        //΄ςλεγχος αντιστοιχίας του πλήθους των keypoints και των descriptors.
+        if (descriptors.size() != keypoints.size() * kSiftDim) {
+            error = "SIFT returned " + std::to_string(keypoints.size()) + " keypoints but " +
+            std::to_string(descriptors.size()) + " descriptor values for '" + image + "'";
+            return false;
+        }
+        //αποθήκευση του αναγνωριστικού, των διαστάσεων και του μεγέθους της εικόνας.
+        f.key = key;
+        f.width = gray.cols;
+        f.height = gray.rows;
+        f.imageBytes = bytes;
+        //αποθήκευση των συντεταγμένων των keypoints.
+        for (const cv::KeyPoint& k : keypoints) {
+            f.x.push_back(k.pt.x);
+            f.y.push_back(k.pt.y);
+        }
+        //Δημιουργία του πίνακα των descriptors.
+        f.descriptors = Matrix(static_cast<int>(keypoints.size()), kSiftDim);
+        //Μεταφορά των τημών των descriptors στον πίνακα.
+        f.descriptors.data = std::move(descriptors);
+        // Αποθήκευση των χαρακτηριστικών στον δίσκο.
+        if (!saveFeatures(cache, f, error)) {
+            return false;
+        }
+    }
+    //μεταφορά των χαρακτηριστηκών στη μνήμη.
+    memory_[memoryKey] = std::move(f);
+    //Επιστροφή της διεύθινσης των αποθηκευμένων χαρακτηριστικών.
+    out = &memory_[memoryKey];
+    return true;
+}
