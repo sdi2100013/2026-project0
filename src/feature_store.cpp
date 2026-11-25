@@ -53,6 +53,21 @@ bool isNameChar(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isDigit(c) || c == '_';
 }
 
+
+//Προσθήκη της διαδικής αναπαράστασης μιας τιμής στο buffer.
+template <class T>
+void put(std::vector<char>& buffer, const T& value) {
+    const char* ptr = reinterpret_cast<const char*>(&value);
+    buffer.insert(buffer.end(), ptr, ptr + sizeof(value));
+}
+
+//Αποθήκευση του μήκους ενός string και στη συνέχεια των χαρακτήρων του.
+void putStr(std::vector<char>& buffer, const std::string& s) {
+    put(buffer, static_cast<uint32_t>(s.size()));
+    buffer.insert(buffer.end(), s.begin(), s.end());
+}
+
+
 }//Τέλος το namespace
 
 
@@ -103,3 +118,77 @@ bool keyFromDbId(const std::string& dbId, ImageKey& key, std::string& error) {
     key.id = dbId;
     return validImageKey(key, error);
 }
+
+
+// Αποθήκευση των χαρακτηριστικών μιας εικόνας σε δυαδικό αρχείο.
+static bool saveFeatures(const std::string& path, const ImageFeatures& f, std::string& error) {
+    const size_t n = f.x.size();
+    //ελεγχος συνέπειας του πλήθους των keypoints και descriptors.
+    if (n > kMaxCount || f.y.size() != n || f.descriptors.rows != static_cast<int>(n) ||
+        f.descriptors.cols != kSiftDim || f.descriptors.data.size() != n * kSiftDim) {
+        error = "inconsistent feature arrays for '" + f.key.id + "'";
+        return false;
+    }
+    //δημιουργία του buffer και αποθήκευση της επικεφαλήδας.
+    std::vector<char> buffer;
+    buffer.insert(buffer.end(), kMagic, kMagic + sizeof(kMagic));
+    put(buffer, kFeatureFormatVersion);
+    put(buffer, static_cast<uint8_t>(f.key.source));
+    putStr(buffer, f.key.id);
+    putStr(buffer, siftConfigId());
+    put(buffer, f.imageBytes);
+    put(buffer, static_cast<int32_t>(f.width));
+    put(buffer, static_cast<int32_t>(f.height));
+    put(buffer, kDim);
+    put(buffer, static_cast<uint64_t>(n));
+    //αρχική θέση των δεδομένων των χαρακτηριστικών.
+    const size_t payloadStart = buffer.size();
+    //αποθήκευση των συντεταγμένων των keypoints.
+    for (double value : f.x) {
+        put(buffer, static_cast<float>(value));
+    }
+    for (double value : f.y) {
+        put(buffer, static_cast<float>(value));
+    }
+    // Αποθήκευση των SIFT descriptors.
+    if (n > 0) {
+        const char* ptr = reinterpret_cast<const char*>(f.descriptors.data.data());
+        buffer.insert(buffer.end(), ptr, ptr + n * kSiftDim * sizeof(float));
+    }
+    //υπολογισμός και αποθήκευση του checksum των χαρακτηριστηκών.
+    const std::string checksum = hashBytes(buffer.data() + payloadStart, buffer.size() - payloadStart);
+    buffer.insert(buffer.end(), checksum.begin(), checksum.end());
+    //δημιουργία του καταλόγου αποθήκευσης, εάν δεν υπάρχει.
+    std::error_code ec;
+    const fs::path p(path);
+    if (p.has_parent_path()) {
+        fs::create_directories(p.parent_path(), ec);
+        if (ec) {
+            error = "cannot create directory '" + p.parent_path().string() + "': " + ec.message();
+            return false;
+        }
+    }
+    // Εγγραφή των δεδομένων σε προσωρινό δυαδικό αρχείο.
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        if (!out) {
+            error = "cannot write '" + tmp + "'";
+            return false;
+        }
+        out.write(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        out.flush();
+        if (!out) {
+            error = "error while writing '" + tmp + "'";
+            return false;
+        }
+    }
+    // Μετονομασία του προσωρινού αρχείου στο τελικό αρχείο.
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        error = "cannot move '" + tmp + "' to '" + path + "': " + ec.message();
+        return false;
+    }
+    return true;
+}
+
